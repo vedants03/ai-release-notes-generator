@@ -1,0 +1,233 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<title>AI Release Notes Generator</title>
+<script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+<style>
+  :root { --border: #d0d0d0; --muted: #666; --bg: #fafafa; }
+  body { font-family: system-ui, -apple-system, sans-serif; max-width: 1100px; margin: 2rem auto; padding: 0 1rem; color: #222; }
+  h1 { font-size: 1.5rem; margin-bottom: 0.25rem; }
+  .subtitle { color: var(--muted); margin-top: 0; }
+  .section { margin-top: 1.5rem; }
+  .section-title { font-weight: 600; margin-bottom: 0.5rem; }
+  textarea { width: 100%; min-height: 180px; font-family: ui-monospace, monospace; font-size: 0.9rem; padding: 0.6rem; box-sizing: border-box; border: 1px solid var(--border); border-radius: 4px; }
+  button { padding: 0.5rem 1rem; cursor: pointer; border: 1px solid var(--border); background: #fff; border-radius: 4px; font-size: 0.95rem; }
+  button.primary { background: #1a73e8; color: #fff; border-color: #1a73e8; }
+  button:disabled { opacity: 0.5; cursor: not-allowed; }
+  #progress { font-family: ui-monospace, monospace; font-size: 0.85rem; color: var(--muted); background: var(--bg); padding: 0.75rem; border-radius: 4px; min-height: 2rem; }
+  #progress .node { padding: 2px 0; }
+  #progress .done::before { content: "✓ "; color: #1e8e3e; }
+  #progress .running::before { content: "⏳ "; }
+  #progress .error::before { content: "✗ "; color: #d93025; }
+  table { border-collapse: collapse; width: 100%; }
+  th, td { border: 1px solid var(--border); padding: 0.5rem; text-align: left; font-size: 0.9rem; vertical-align: top; }
+  th { background: var(--bg); }
+  select { padding: 0.25rem; font-size: 0.9rem; }
+  .refs { color: var(--muted); font-family: ui-monospace, monospace; font-size: 0.8rem; }
+  .notes { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
+  .notes > div { border: 1px solid var(--border); padding: 1rem; border-radius: 4px; background: #fff; }
+  .notes h2 { margin-top: 0; font-size: 1rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+  .notes-body h2, .notes-body h3 { margin-top: 1rem; }
+  .notes-body ul { padding-left: 1.25rem; }
+  .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 3px; background: var(--bg); font-size: 0.8rem; color: var(--muted); margin-left: 0.5rem; }
+  .hallu { background: #fff8e1; border: 1px solid #f9ab00; padding: 0.5rem; margin-top: 0.5rem; font-size: 0.85rem; border-radius: 4px; }
+  .hallu strong { color: #b06000; }
+</style>
+</head>
+<body>
+  <h1>AI Release Notes Generator</h1>
+  <p class="subtitle">Paste engineering artifacts (tickets, PRs, commits) → get customer + internal release notes.</p>
+
+  <div class="section">
+    <div class="section-title">Input</div>
+    <textarea id="raw-input" placeholder="JIRA-421: Add dark mode toggle&#10;PR #892: BREAKING - Rename getUser to fetchUser&#10;abc123f chore: bump eslint to 9.0"></textarea>
+    <div style="margin-top: 0.5rem;">
+      <button id="generate-btn" class="primary" onclick="generate()">Generate</button>
+    </div>
+  </div>
+
+  <div class="section">
+    <div class="section-title">Progress</div>
+    <div id="progress"></div>
+  </div>
+
+  <div id="hitl" class="section" style="display: none;">
+    <div class="section-title">Review classifications</div>
+    <p class="subtitle" style="margin: 0 0 0.5rem 0;">Adjust the category for any item, then continue.</p>
+    <table id="hitl-table">
+      <thead><tr><th>ID</th><th>Title</th><th>Refs</th><th>Category</th></tr></thead>
+      <tbody></tbody>
+    </table>
+    <div style="margin-top: 0.5rem;">
+      <button id="resume-btn" class="primary" onclick="resume()">Approve & Continue</button>
+    </div>
+  </div>
+
+  <div id="result" class="section" style="display: none;">
+    <div class="section-title">Result <span class="badge" id="version-bump"></span></div>
+    <div class="notes">
+      <div>
+        <h2>Customer notes</h2>
+        <div class="notes-body" id="customer-notes"></div>
+        <div id="customer-hallu"></div>
+      </div>
+      <div>
+        <h2>Internal notes</h2>
+        <div class="notes-body" id="internal-notes"></div>
+        <div id="internal-hallu"></div>
+      </div>
+    </div>
+  </div>
+
+<script>
+let threadId = null;
+let changeItems = [];
+
+async function streamNDJSON(response, onEvent) {
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+    buffer += decoder.decode(value, { stream: true });
+    const lines = buffer.split("\n");
+    buffer = lines.pop();
+    for (const line of lines) {
+      if (line.trim()) {
+        try { onEvent(JSON.parse(line)); }
+        catch (e) { console.error("bad event", line, e); }
+      }
+    }
+  }
+  if (buffer.trim()) {
+    try { onEvent(JSON.parse(buffer)); } catch (e) { console.error(e); }
+  }
+}
+
+function escapeHtml(s) {
+  return String(s ?? "").replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
+}
+
+function resetUI() {
+  document.getElementById("progress").innerHTML = "";
+  document.getElementById("hitl").style.display = "none";
+  document.getElementById("result").style.display = "none";
+  document.getElementById("customer-hallu").innerHTML = "";
+  document.getElementById("internal-hallu").innerHTML = "";
+  threadId = null;
+  changeItems = [];
+}
+
+function appendProgress(node) {
+  const el = document.getElementById("progress");
+  const row = document.createElement("div");
+  row.className = "node done";
+  row.textContent = node;
+  el.appendChild(row);
+}
+
+function renderHITL(items) {
+  const tbody = document.querySelector("#hitl-table tbody");
+  tbody.innerHTML = "";
+  const categories = ["bugfix", "enhancement", "breaking_change", "other"];
+  for (const item of items) {
+    const tr = document.createElement("tr");
+    const refs = (item.source_refs || []).join(", ") || "—";
+    const opts = categories.map(c => `<option value="${c}" ${item.category===c?"selected":""}>${c}</option>`).join("");
+    tr.innerHTML = `
+      <td>${item.id}</td>
+      <td>${escapeHtml(item.title)}</td>
+      <td class="refs">${escapeHtml(refs)}</td>
+      <td><select id="cat-${item.id}">${opts}</select></td>
+    `;
+    tbody.appendChild(tr);
+  }
+  document.getElementById("hitl").style.display = "block";
+}
+
+function renderHalluIssues(containerId, issues) {
+  const el = document.getElementById(containerId);
+  if (!issues || issues.length === 0) { el.innerHTML = ""; return; }
+  el.innerHTML = `<div class="hallu"><strong>Fidelity issues flagged:</strong><ul>${
+    issues.map(i => `<li>"${escapeHtml(i.quote)}" — ${escapeHtml(i.problem)}</li>`).join("")
+  }</ul></div>`;
+}
+
+function renderResult(event) {
+  document.getElementById("customer-notes").innerHTML = marked.parse(event.customer_notes || "_(empty)_");
+  document.getElementById("internal-notes").innerHTML = marked.parse(event.internal_notes || "_(empty)_");
+  document.getElementById("version-bump").textContent = `version bump: ${event.version_bump ?? "—"}`;
+  const report = event.hallucination_report || {};
+  renderHalluIssues("customer-hallu", report.customer);
+  renderHalluIssues("internal-hallu", report.internal);
+  document.getElementById("result").style.display = "block";
+}
+
+function handleEvent(event) {
+  if (event.type === "node_completed") {
+    appendProgress(event.node);
+  } else if (event.type === "interrupt") {
+    threadId = event.thread_id;
+    changeItems = event.payload.change_items || [];
+    renderHITL(changeItems);
+  } else if (event.type === "result") {
+    renderResult(event);
+  } else if (event.type === "error") {
+    const el = document.getElementById("progress");
+    const row = document.createElement("div");
+    row.className = "node error";
+    row.textContent = `${event.error_type}: ${event.message}`;
+    el.appendChild(row);
+  }
+}
+
+async function generate() {
+  const input = document.getElementById("raw-input").value;
+  if (!input.trim()) return;
+  resetUI();
+  const btn = document.getElementById("generate-btn");
+  btn.disabled = true;
+  try {
+    const response = await fetch("/api/generate", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ raw_input: input }),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    await streamNDJSON(response, handleEvent);
+  } catch (e) {
+    console.error(e);
+    alert("Generation failed: " + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+async function resume() {
+  const items = changeItems.map(i => ({
+    id: i.id,
+    category: document.getElementById(`cat-${i.id}`).value,
+  }));
+  const btn = document.getElementById("resume-btn");
+  btn.disabled = true;
+  document.getElementById("hitl").style.display = "none";
+  try {
+    const response = await fetch("/api/resume", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ thread_id: threadId, items }),
+    });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    await streamNDJSON(response, handleEvent);
+  } catch (e) {
+    console.error(e);
+    alert("Resume failed: " + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+}
+</script>
+</body>
+</html>

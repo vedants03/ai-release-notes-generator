@@ -1,0 +1,48 @@
+# Don't ship junk / secrets into the image.
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+*.so
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments
+venv/
+.venv/
+env/
+
+# Environment variables — NEVER bake into an image
+.env
+.env.local
+
+# IDE / OS
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
+
+# Checkpointer DB — will be recreated by the app
+checkpoints.db
+*.db-journal
+*.db-wal
+*.db-shm
+
+# Git
+.git/
+.gitignore
+
+# Docker itself
+Dockerfile
+.dockerignore
+
+# Docs that don't need to ship
+README.md
+*.md
