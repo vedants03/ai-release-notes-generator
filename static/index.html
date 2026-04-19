@@ -27,7 +27,12 @@
   .refs { color: var(--muted); font-family: ui-monospace, monospace; font-size: 0.8rem; }
   .notes { display: grid; grid-template-columns: 1fr 1fr; gap: 1rem; }
   .notes > div { border: 1px solid var(--border); padding: 1rem; border-radius: 4px; background: #fff; }
-  .notes h2 { margin-top: 0; font-size: 1rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; }
+  .notes-header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid var(--border); padding-bottom: 0.5rem; margin-bottom: 0.5rem; }
+  .notes h2 { margin: 0; font-size: 1rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
+  .copy-btn { font-size: 0.8rem; padding: 0.25rem 0.6rem; border: 1px solid var(--border); background: #fff; border-radius: 3px; cursor: pointer; color: var(--muted); }
+  .copy-btn:hover:not(:disabled) { background: var(--bg); }
+  .copy-btn.copied { color: #1e8e3e; border-color: #1e8e3e; }
+  .copy-btn:disabled { opacity: 0.4; cursor: not-allowed; }
   .notes-body h2, .notes-body h3 { margin-top: 1rem; }
   .notes-body ul { padding-left: 1.25rem; }
   .badge { display: inline-block; padding: 0.15rem 0.5rem; border-radius: 3px; background: var(--bg); font-size: 0.8rem; color: var(--muted); margin-left: 0.5rem; }
@@ -68,12 +73,18 @@
     <div class="section-title">Result <span class="badge" id="version-bump"></span></div>
     <div class="notes">
       <div>
-        <h2>Customer notes</h2>
+        <div class="notes-header">
+          <h2>Customer notes</h2>
+          <button class="copy-btn" id="copy-customer" disabled>Copy markdown</button>
+        </div>
         <div class="notes-body" id="customer-notes"></div>
         <div id="customer-hallu"></div>
       </div>
       <div>
-        <h2>Internal notes</h2>
+        <div class="notes-header">
+          <h2>Internal notes</h2>
+          <button class="copy-btn" id="copy-internal" disabled>Copy markdown</button>
+        </div>
         <div class="notes-body" id="internal-notes"></div>
         <div id="internal-hallu"></div>
       </div>
@@ -83,6 +94,8 @@
 <script>
 let threadId = null;
 let changeItems = [];
+let customerMarkdown = "";
+let internalMarkdown = "";
 
 async function streamNDJSON(response, onEvent) {
   const reader = response.body.getReader();
@@ -116,9 +129,32 @@ function resetUI() {
   document.getElementById("result").style.display = "none";
   document.getElementById("customer-hallu").innerHTML = "";
   document.getElementById("internal-hallu").innerHTML = "";
+  document.getElementById("copy-customer").disabled = true;
+  document.getElementById("copy-internal").disabled = true;
   threadId = null;
   changeItems = [];
+  customerMarkdown = "";
+  internalMarkdown = "";
 }
+
+async function copyMarkdown(text, btn) {
+  if (!text) return;
+  try {
+    await navigator.clipboard.writeText(text);
+    const original = btn.textContent;
+    btn.textContent = "Copied!";
+    btn.classList.add("copied");
+    setTimeout(() => {
+      btn.textContent = original;
+      btn.classList.remove("copied");
+    }, 1500);
+  } catch (e) {
+    alert("Copy failed: " + e.message);
+  }
+}
+
+document.getElementById("copy-customer").addEventListener("click", (e) => copyMarkdown(customerMarkdown, e.currentTarget));
+document.getElementById("copy-internal").addEventListener("click", (e) => copyMarkdown(internalMarkdown, e.currentTarget));
 
 function appendProgress(node) {
   const el = document.getElementById("progress");
@@ -156,8 +192,12 @@ function renderHalluIssues(containerId, issues) {
 }
 
 function renderResult(event) {
-  document.getElementById("customer-notes").innerHTML = marked.parse(event.customer_notes || "_(empty)_");
-  document.getElementById("internal-notes").innerHTML = marked.parse(event.internal_notes || "_(empty)_");
+  customerMarkdown = event.customer_notes || "";
+  internalMarkdown = event.internal_notes || "";
+  document.getElementById("customer-notes").innerHTML = marked.parse(customerMarkdown || "_(empty)_");
+  document.getElementById("internal-notes").innerHTML = marked.parse(internalMarkdown || "_(empty)_");
+  document.getElementById("copy-customer").disabled = !customerMarkdown;
+  document.getElementById("copy-internal").disabled = !internalMarkdown;
   document.getElementById("version-bump").textContent = `version bump: ${event.version_bump ?? "—"}`;
   const report = event.hallucination_report || {};
   renderHalluIssues("customer-hallu", report.customer);
