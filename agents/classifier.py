@@ -4,7 +4,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel
 
 from state import GraphState
-from utils.llm import get_llm
+from utils.llm import get_llm, ainvoke_with_retry
 
 
 class _Classification(BaseModel):
@@ -47,11 +47,12 @@ async def classifier_node(state: GraphState) -> dict:
     llm = get_llm()
     structured = llm.with_structured_output(_Classifications, method="function_calling")
 
-    result: _Classifications = await structured.ainvoke(
+    result: _Classifications = await ainvoke_with_retry(
+        structured,
         [
             SystemMessage(content=SYSTEM_PROMPT),
             HumanMessage(content=_format_items(items)),
-        ]
+        ],
     )
 
     cat_map = {c.id: c.category for c in result.items}

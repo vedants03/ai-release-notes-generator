@@ -4,7 +4,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel
 
 from state import GraphState
-from utils.llm import get_llm
+from utils.llm import get_llm, ainvoke_with_retry
 
 
 class _Issue(BaseModel):
@@ -60,11 +60,12 @@ async def hallucinator_node(state: GraphState) -> dict:
         f"INTERNAL NOTES:\n{internal_notes or '(empty)'}"
     )
 
-    result: _Report = await structured.ainvoke(
+    result: _Report = await ainvoke_with_retry(
+        structured,
         [
             SystemMessage(content=SYSTEM_PROMPT),
             HumanMessage(content=user_msg),
-        ]
+        ],
     )
 
     report = {

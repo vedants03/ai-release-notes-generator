@@ -53,7 +53,14 @@ def build_graph(checkpointer):
     g.add_node("hallucinator", hallucinator_node)
 
     g.add_edge(START, "extractor")
-    g.add_edge("extractor", "classifier")
+
+    # Conditional edge so extractor's Command(goto=END) is respected
+    # when no change items are found (e.g. random text input).
+    g.add_conditional_edges(
+        "extractor",
+        lambda state: END if not state.get("change_items") else "classifier",
+        ["classifier", END],
+    )
     g.add_edge("classifier", "hitl_review")
     g.add_edge("hitl_review", "router")
 

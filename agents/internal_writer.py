@@ -1,7 +1,7 @@
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from state import GraphState
-from utils.llm import get_llm
+from utils.llm import get_llm, ainvoke_with_retry
 
 
 SYSTEM_PROMPT = """You are a release-notes writer for an engineering audience.
@@ -91,10 +91,11 @@ async def internal_writer_node(state: GraphState) -> dict:
             f"{user_msg}"
         )
 
-    result = await llm.ainvoke(
+    result = await ainvoke_with_retry(
+        llm,
         [
             SystemMessage(content=SYSTEM_PROMPT),
             HumanMessage(content=user_msg),
-        ]
+        ],
     )
     return {"internal_notes": result.content}
